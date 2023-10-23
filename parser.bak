@@ -1,0 +1,171 @@
+;Jacob Smith - jdsp4k@umkc.edu
+;Functional Programming - Let's Build a Parser
+;10/15/2023
+#lang racket
+(require data/either)
+
+;--TOKENIZER--
+;char, list -> boolean
+(define (is-char-in-list? char chars)
+  (if (empty? chars)
+      #f
+      (if (char=? char (first chars))
+          #t
+          (is-char-in-list? char (rest chars)))))
+
+;char -> bool
+(define (is-delimiter? char [delim-chars '(#\;)] [count-whitespace? #t])
+  (define (delim-comp each-char)
+    (char=? char each-char))
+  (or
+   (char-whitespace? char)
+   (ormap delim-comp delim-chars)))
+
+;string -> either
+(define (rec-is-token-delimiter cur-token rest-of-string)
+  (if (empty? rest-of-string)
+      (failure "EOF")
+      (if (is-delimiter? (first rest-of-string))
+          (success (list cur-token rest-of-string))
+          (rec-is-token-delimiter (append cur-token (list (first rest-of-string))) (rest rest-of-string)))))
+
+;string -> either
+(define (get-next-token string)
+  (let ([token (rec-is-token-delimiter '() string)])
+    (if (success? token)
+        (success (list (string-trim (list->string (first (from-either token)))) (second (from-either token))))
+        (failure (from-either token)))))
+
+;
+(define (get-token-list string token-list)
+  (let ([token (get-next-token (string->list string))])
+    (if (failure? token)
+        (append token-list (list 'EOF))
+        (get-token-list (list->string (second (from-either token))) (append token-list (list (first (from-either token))))))))
+
+;--END TOKENIZER--
+
+;
+
+
+;list -> either
+;(define (program str-list)
+;  (let ([linelist-val (linelist str-list)])
+;  (if (success? linelist-val)
+;      (success "accepted")
+;      (failure "dumbo"))))
+
+;char -> bool
+(define (is-numsign? char)
+  (or (char=? char #\+)
+      (char=? char #\-)))
+
+;char -> bool
+(define (is-expr-sign? char)
+  (or
+   (char=? char #\+)
+   (char=? char #\-)
+   (char=? char #\*)
+   (char=? char #\/)))
+
+;char -> bool
+(define (is-gtlt? char)
+  (or
+   (char=? char #\<)
+   (char=? char #\>)))
+
+;char -> bool
+(define (is-comp-op? char)
+  (or
+   (char=? char #\<)
+   (char=? char #\>)
+   (char=? char #\=)))
+
+;char -> bool
+(define (is-endline? char)
+  (char=? char #\;))
+
+;string -> bool
+(define (is-boolean-reserved? string)
+  (or
+   (string=? string "true")
+   (string=? string "false")))
+
+;string -> bool
+(define (is-num? string)
+  (or
+   (and
+    (is-numsign? (first (string->list string)))
+    (andmap char-numeric? (rest (string->list string))))
+   (andmap char-numeric? (string->list string))))
+
+;char -> bool
+(define (is-alphanumeric? char)
+  (or
+   (char-alphabetic? char)
+   (char-numeric? char)))
+
+;string -> bool
+(define (is-id? string)
+  (and
+   (char-alphabetic? (first (string->list string)))
+   (andmap is-alphanumeric? (string->list string))))
+
+;list -> bool
+(define (is-etail? wordlist)
+  (or
+   (and
+    (is-expr-sign? (first wordlist))
+    (is-expr? (rest wordlist)))
+   (empty? wordlist)))
+
+;list -> list
+(define (rem-last list)
+  (reverse (rest (reverse list))))
+
+;list -> bool
+(define (is-expr? wordlist)
+  (or
+   (and
+    (is-id? (first wordlist))
+    (is-etail? (rest wordlist)))
+   (and
+    (is-num? (first wordlist))
+    (is-etail? (rest wordlist)))
+   (and
+    (and
+     (char=? #\( (first (first wordlist)))
+     (empty? (rest (first wordlist))))
+    (is-expr? (rest (rem-last wordlist)))
+    (and
+     (char=? #\) (first (last wordlist)))
+     (empty? (rest (last wordlist)))))))
+
+;list -> bool
+(define (is-bool-op? wordlist)
+  (or
+   (and
+    (or
+     (is-gtlt? (first (first wordlist)))
+     (char=? #\= (first (first wordlist))))
+    (empty (rest (first wordlist))))
+   (and
+    (is-gtlt? (first (first wordlist)))
+    (char=? #\= (second (first wordlist)))
+    (empty? (rest (rest (first wordlist)))))
+   (and
+    (char=? #\< (first (first wordlist)))
+    (char=? #\> (second (first wordlist)))
+    (empty? (rest (rest (first wordlist)))))))
+
+;list -> bool
+(define (is-boolean? wordlist)
+  (or
+   (and
+    (is-boolean-reserved? (first wordlist))
+    (empty (rest wordlist)))
+   (and
+    (is-expr? wordlist))))
+
+;--BEGIN PARSER--
+;(string-split input #\;)

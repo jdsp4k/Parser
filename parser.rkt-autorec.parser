@@ -1,0 +1,381 @@
+;Jacob Smith - jdsp4k@umkc.edu
+;Functional Programming - Let's Build a Parser
+;10/22/2023
+#lang racket
+(require data/either)
+
+;--BEGIN SCANNER--
+;string->either(int, 'EOF)
+;Takes a string and returns the location of the next delimiter character or whitespace (if count-whitespace is #t).
+(define (get-next-delimiter-loc string [delim-list '(#\; #\: #\( #\))] [loc 0] [count-whitespace? #t])
+  (define (map-char char)
+    (char=? (first (string->list string)) char))
+  (if (empty? (string->list string))
+      (failure 'EOF)
+      (if
+       (or
+        (ormap map-char delim-list)
+        (and
+         (char-whitespace? (first (string->list string)))
+         count-whitespace?))
+       (success loc)
+       (get-next-delimiter-loc (list->string (rest (string->list string))) delim-list (+ loc 1)))))
+
+;string->bool
+;Takes a string and returns true if it is "useless" ie is empty, or only whitespace, but not a newline.
+(define (is-useless-string? string)
+  (define (mapable-char=? char [target-char #\newline])
+    (char=? char target-char))
+  (or
+   (empty? (string->list string))
+   (and
+    (ormap char-whitespace? (string->list string))
+    (not (ormap mapable-char=? (string->list string))))))
+
+;string->bool
+;Inverts is-useless-string for filtering.
+(define (is-not-useless-string? string)
+  (not (is-useless-string? string)))
+
+;string->list(string)
+;Takes a string and returns a list of tokens.
+(define (get-token-list string [token-list '()])
+  (if (empty? (string->list string))
+      (filter is-not-useless-string? token-list)
+      (let ([token (get-next-delimiter-loc string)])
+        (if (failure? token)
+            (filter is-not-useless-string? (append token-list (list string)))
+            (if (= (from-either token) 0)
+                (get-token-list (substring string 1) (append token-list (list (substring string 0 1))))
+                (get-token-list (substring string (from-either token)) (append token-list (list (substring string 0 (from-either token))))))))))
+
+;--END SCANNER--
+;--BEGIN LEXER--
+;string->bool
+;Takes a string and checks if it is a valid id.
+(define (check-id string [first-char? #t])
+  (if first-char?
+      (and
+       (char-alphabetic? (first (string->list string)))
+       (or
+        (empty? (rest (string->list string)))
+        (check-id (list->string (rest (string->list string))) #f)))
+      (and
+       (or
+        (char-alphabetic? (first (string->list string)))
+        (char-numeric? (first (string->list string))))
+       (or
+        (empty? (rest (string->list string)))
+        (check-id (list->string (rest (string->list string))) #f)))))
+
+;char->bool
+;Takes a bool and checks if it is a valid digit prefix character.
+(define (is-digit-prefix? char)
+  (or
+   (char=? #\+ char)
+   (char=? #\- char)))
+
+;string->bool
+;Takes a string and checks if it is a valid num.
+(define (check-num string [first-char? #t])
+  (if first-char?
+      (or
+       (and
+        (is-digit-prefix? (first (string->list string)))
+        (and
+         (not (empty? (rest (string->list string))))
+         (check-num (list->string (rest (string->list string))) #f)))
+       (and
+        (char=? #\0 (first (string->list string)))
+        (empty? (rest (string->list string))))
+       (and
+        (not (char=? #\0 (first (string->list string))))
+        (char-numeric? (first (string->list string)))
+        (or
+         (empty? (rest (string->list string)))
+         (check-num (list->string (rest (string->list string))) #f))))
+      (and
+       (char-numeric? (first (string->list string)))
+       (or
+        (empty? (rest (string->list string)))
+        (check-num (list->string (rest (string->list string))) #f)))))
+
+;string->either((terminal, string), fail)
+;Takes a string representing a token and returns a datum which matches if one exists.
+(define (check-token string target-result-pair [fail #f] [word-chk string=?])
+  (if (word-chk string (car target-result-pair))
+      (success (cons (first (cdr target-result-pair)) string))
+      (failure fail)))
+
+;string->either((datum, string), string)
+;Takes a token and appends the approprate tag to it, or fails if the token can't be matched.
+(define (lex token [id-proc check-id] [num-proc check-num] [pairs '(("\n" newline)
+                                                                        (":" colon)
+                                                                        ("+" plus-sign)
+                                                                        ("=" equal-sign)
+                                                                        (";" semicolon)
+                                                                        ("if" if)
+                                                                        ("(" left-para)
+                                                                        (")" right-para)
+                                                                        ("while" while)
+                                                                        ("endwhile" endwhile)
+                                                                        ("read" read)
+                                                                        ("write" write)
+                                                                        ("goto" goto)
+                                                                        ("gosub" gosub)
+                                                                        ("return" return)
+                                                                        ("break" break)
+                                                                        ("end" end)
+                                                                        ("true" true)
+                                                                        ("false" false)
+                                                                        ("<" lt-sign)
+                                                                        (">" gt-sign)
+                                                                        (">=" gteq-sign)
+                                                                        ("<=" lteq-sign)
+                                                                        ("<>" neq-sign)
+                                                                        ("-" minus-sign)
+                                                                        ("*" multiplication-sign)
+                                                                        ("/" division-sign)
+                                                                        ("$$" eof))])
+  (if (empty? pairs)
+      (if (id-proc token)
+          (success (cons 'id token))
+          (if (num-proc token)
+              (success (cons 'num token))
+              (failure (cons "Unexpected token:" token))))
+      (let ([lexeme (check-token token (first pairs))])
+        (if (failure? lexeme)
+            (lex token id-proc num-proc (rest pairs))
+            lexeme))))
+
+;
+(define (get-current-line-number token-list [loc 1])
+  (if (empty? token-list)
+      loc
+      (if (eq? (car (first token-list)) 'newline)
+          (get-current-line-number (rest token-list) (+ loc 1))
+          (get-current-line-number (rest token-list) loc))))
+  
+;
+(define (lex-tokens token-list [lex-list '()])
+  (if (empty? token-list)
+      (success lex-list)
+      (let ([lexed-token (lex (first token-list))])
+        (if (failure? lexed-token)
+            (failure (cons (get-current-line-number lex-list) (from-either lexed-token)))
+            (lex-tokens (rest token-list) (append lex-list (list (from-either lexed-token))))))))
+
+;--END LEXER--
+;--BEGIN PARSER--
+;
+;
+(define (first-ignore-newline token-list)
+  (if (eq? (car (first token-list)) 'newline)
+      (first-ignore-newline (rest token-list))
+      (first token-list)))
+
+;
+;
+(define (p-build-list list [result-list '()])
+  (if (empty? list)
+      result-list
+      (p-build-list (rest list) (append (car (first list))))))
+
+;
+;
+(define (build-success result-tree success-lex success-list)
+  (cons (cons result-tree (first (from-either success-list))) (success (rest (from-either success-list)))))
+
+;
+;
+(define (terminal-lex? token-list-either result-tree lex)
+  (if (eq? (car (first-ignore-newline (from-either token-list-either))) lex)
+      (success (build-success result-tree lex token-list-either))
+      (failure (cons token-list-either result-tree))))
+
+;
+;
+(define (test token-list-either result-tree test-list [eps-flag-list '()])
+  (define (get-false dummy-arg)
+    #f)
+  (cond
+    [(= (length test-list) (length eps-flag-list)) (test-flag token-list-either result-tree test-list eps-flag-list)]
+    [(empty? eps-flag-list) (test-flag token-list-either result-tree test-list (build-list (length test-list) get-false))]
+    [else (error "Length mismatch in test-list and eps-flag-list")]))
+
+;
+;
+(define (test-flag token-list-either result-tree test-list eps-flag-list)
+  (cond
+    [(empty? token-list-either) (failure (cons result-tree token-list-either))]
+    [(empty? test-list) (success (build-success result-tree #f token-list-either))]
+    [(cond
+       [(pair? (first test-list))
+        (let ([result ((car (first test-list)) token-list-either result-tree)])
+          (cond
+            [(and (failure? result) (not (first eps-flag-list))) (failure (build-success result-tree #f token-list-either))]
+            [(and (failure? result) (first eps-flag-list)) (test-flag (cdr (from-either result)) (car (from-either result)) (rest test-list) (rest eps-flag-list))]
+            [(success? result) (test-flag (cdr (from-either result)) (car (from-either result)) (rest test-list) (rest eps-flag-list))]))]
+       [else (let ([result (terminal-lex? token-list-either result-tree (first test-list))])
+               (cond
+                 [(and (failure? result) (not (first eps-flag-list))) (failure (build-success result-tree #f token-list-either))]
+                 [(and (failure? result) (first eps-flag-list)) (test-flag (cdr (from-either result)) (car (from-either result)) (rest test-list) (rest eps-flag-list))]
+                 [(success? result) (test-flag (cdr (from-either result)) (car (from-either result)) (rest test-list) (rest eps-flag-list))]))])]))
+
+;
+;
+(define (etail? token-list-either result-tree)
+  (define (this-test test-list [eps-flag-list '()])
+    (test token-list-either result-tree test-list eps-flag-list))
+  (let ([a (this-test (list 'plus-sign (cons expr? 'expr)))]
+        [b (this-test (list 'minus-sign (cons expr? 'expr)))]
+        [c (this-test (list 'multiplication-sign (cons expr? 'expr)))]
+        [d (this-test (list 'division-sign (cons expr? 'expr)))])
+    (cond
+      [(success? a) a]
+      [(success? b) b]
+      [(success? c) c]
+      [(success? d) d]
+      [else (failure (cons result-tree token-list-either))])))
+
+;
+;
+(define (expr? token-list-either result-tree)
+  (define (this-test test-list [eps-flag-list '()])
+    (test token-list-either result-tree test-list eps-flag-list))
+  (let ([a (this-test (list 'id (cons etail? 'etail)) (list #f #t))]
+        [b (this-test (list 'num (cons etail? 'etail)) (list #f #t))]
+        [c (this-test (list 'right-para (cons expr? 'expr) 'left-para))])
+    (cond
+     [(success? a) a]
+     [(success? b) b]
+     [(success? c) c]
+     [else (failure (cons result-tree token-list-either))])))
+
+;
+;
+(define (bool-op? token-list-either result-tree)
+  (define (this-test test-list [eps-flag-list '()])
+    (test token-list-either result-tree test-list eps-flag-list))
+  (let ([a (this-test (list 'lt-sign))]
+        [b (this-test (list 'gt-sign))]
+        [c (this-test (list 'gteq-sign))]
+        [d (this-test (list 'lteq-sign))]
+        [e (this-test (list 'neq-sign))]
+        [f (this-test (list 'eq-sign))])
+    (cond
+      [(success? a) a]
+      [(success? b) b]
+      [(success? c) c]
+      [(success? d) d]
+      [(success? e) e]
+      [(success? f) f]
+      [else (failure (cons result-tree token-list-either))])))
+
+;
+;
+(define (boolean? token-list-either result-tree)
+  (define (this-test test-list [eps-flag-list '()])
+    (test token-list-either result-tree test-list eps-flag-list))
+  (let ([a (this-test (list 'true))]
+        [b (this-test (list 'false))]
+        [c (this-test (list (cons expr? 'expr) (cons bool-op? 'bool-op) (cons expr? 'expr)))])
+    (cond
+      [(success? a) a]
+      [(success? b) b]
+      [(success? c) c]
+      [else (failure (cons result-tree token-list-either))])))
+
+;
+;
+(define (stmt? token-list-either result-tree)
+  (define (this-test test-list [eps-flag-list '()])
+    (test token-list-either result-tree test-list eps-flag-list))
+  (let ([a (this-test (list 'id 'equal-sign (cons expr? 'expr) 'semicolon))]
+        [b (this-test (list 'if 'left-para (cons boolean? 'boolean) 'right-para (cons stmt? 'stmt)))]
+        [c (this-test (list 'while 'right-para (cons boolean? 'boolean) 'left-para (cons linelist? 'linelist) 'endwhile 'semicolon) (list #f #f #f #f #t #f #f))]
+        [d (this-test (list 'read 'id 'semicolon))]
+        [e (this-test (list 'write (cons expr? 'expr) 'semicolon))]
+        [f (this-test (list 'goto 'id 'semicolon))]
+        [g (this-test (list 'gosub 'id 'semicolon))]
+        [h (this-test (list 'return 'semicolon))]
+        [i (this-test (list 'break 'semicolon))]
+        [j (this-test (list 'end 'semicolon))])
+    (cond
+      [(success? a) a]
+      [(success? b) b]
+      [(success? c) c]
+      [(success? d) d]
+      [(success? e) e]
+      [(success? f) f]
+      [(success? g) g]
+      [(success? h) h]
+      [(success? i) i]
+      [(success? j) j]
+      [else (failure (cons result-tree token-list-either))])))
+      
+;
+;
+(define (linetail? token-list-either result-tree)
+  (define (this-test test-list [eps-flag-list '()])
+    (test token-list-either result-tree test-list eps-flag-list))
+  (let ([stmt (this-test (list (cons stmt? 'stmt)))])
+    (if (success? stmt)
+        (linetail? (cdr (from-either stmt)) (car (from-either stmt)))
+        stmt)))
+
+;
+;
+(define (label? token-list-either result-tree)
+  (define (this-test test-list [eps-flag-list '()])
+    (test token-list-either result-tree test-list eps-flag-list))
+  (let ([label (this-test (list 'id 'colon))])
+    (cond
+      [(success? label) label]
+      [else (success (cons result-tree token-list-either))])))
+
+;
+;
+(define (line? token-list-either result-tree)
+  (define (this-test test-list [eps-flag-list '()])
+    (test token-list-either result-tree test-list eps-flag-list))
+  (let ([line (this-test (list (cons label? 'label) (cons stmt? 'stmt) (cons linetail? 'linetail) (list #t #f #t)))])
+    (cond
+      [(success? line) line]
+      [else (failure (cons result-tree token-list-either))])))
+
+;
+;
+(define (linelist? token-list-either result-tree)
+  (define (this-test test-list [eps-flag-list '()])
+    (test token-list-either result-tree test-list eps-flag-list))
+  (let ([linelist (this-test (list (cons line? 'line) (cons linelist? 'linelist)) (list #f #t))])
+    (cond
+      [(success? linelist) linelist]
+      [else (failure (cons result-tree token-list-either))])))
+
+;
+;
+;Each parser element returns either a success or failure. A success is constructed as a list ('definition ('definition tokens)*
+(define (program? token-list-either [result-tree (cons 'program 'null)])
+  (define (this-test test-list [eps-flag-list '()])
+        (test token-list-either result-tree test-list eps-flag-list))
+  (if (failure? token-list-either)
+      token-list-either
+      (let ([program (this-test (list (cons linelist? 'linelist) 'eof) (list #t #f))])
+        program)))
+;        (cond
+;          [(success? program) program]
+;          [else (failure (cons result-tree token-list-either))])))) ;DEBUGGING NOTE: This will need to be changed so it returns the result-tree/token-list from the proceding procedure.
+;--END PARSER--
+;--UTILITIES--
+
+;--END UTILITIES--
+;--MAIN PROGRAM--
+;
+;
+(define (parse filename)
+  (let ([parse (program? (lex-tokens (get-token-list (file->string filename #:mode 'text))))])
+    parse))
+
+;--END MAIN PROGRAM--
